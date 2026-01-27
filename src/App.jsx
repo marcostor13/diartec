@@ -234,6 +234,9 @@ const OrderWizard = ({ onBack }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState(null);
+  const [filePreviews, setFilePreviews] = useState([]);
+  const [validationErrors, setValidationErrors] = useState({});
+  const [touchedFields, setTouchedFields] = useState({});
   
   const STEPS = [
     { id: 1, title: "Contacto", icon: User },
@@ -255,6 +258,15 @@ const OrderWizard = ({ onBack }) => {
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+    
+    // Limpiar error del campo cuando el usuario empieza a escribir
+    if (validationErrors[name]) {
+      setValidationErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors[name];
+        return newErrors;
+      });
+    }
   };
 
   const handleSizeChange = (size, value) => {
@@ -267,12 +279,76 @@ const OrderWizard = ({ onBack }) => {
 
   const handleFileUpload = (e) => {
     const newFiles = Array.from(e.target.files);
-    setFormData(prev => ({ ...prev, files: [...prev.files, ...newFiles] }));
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    
+    const validFiles = [];
+    const validPreviews = [];
+    const fileErrors = [];
+    
+    newFiles.forEach((file, index) => {
+      // Validar tipo de archivo
+      if (!ALLOWED_TYPES.includes(file.type)) {
+        fileErrors.push(`${file.name}: Tipo de archivo no permitido. Solo se aceptan imágenes (JPG, PNG, GIF, WEBP).`);
+        return;
+      }
+      
+      // Validar tamaño
+      if (file.size > MAX_FILE_SIZE) {
+        fileErrors.push(`${file.name}: El archivo es demasiado grande. Tamaño máximo: 10MB.`);
+        return;
+      }
+      
+      validFiles.push(file);
+      if (file.type.startsWith('image/')) {
+        validPreviews.push(URL.createObjectURL(file));
+      } else {
+        validPreviews.push(null);
+      }
+    });
+    
+    if (fileErrors.length > 0) {
+      setValidationErrors(prev => ({
+        ...prev,
+        files: fileErrors
+      }));
+    } else {
+      // Limpiar error de archivos si todo está bien
+      setValidationErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors.files;
+        return newErrors;
+      });
+    }
+    
+    setFormData(prev => ({ ...prev, files: [...prev.files, ...validFiles] }));
+    setFilePreviews(prev => [...prev, ...validPreviews]);
+    
+    // Limpiar el input para permitir seleccionar el mismo archivo nuevamente
+    e.target.value = '';
   };
 
   const removeFile = (index) => {
+    // Limpiar la URL de la miniatura si existe
+    if (filePreviews[index]) {
+      URL.revokeObjectURL(filePreviews[index]);
+    }
+    
     setFormData(prev => ({ ...prev, files: prev.files.filter((_, i) => i !== index) }));
+    setFilePreviews(prev => prev.filter((_, i) => i !== index));
   };
+
+  // Limpiar URLs cuando el componente se desmonte
+  useEffect(() => {
+    return () => {
+      filePreviews.forEach(url => {
+        if (url) {
+          URL.revokeObjectURL(url);
+        }
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleNameChange = (size, index, value) => {
     setFormData(prev => {
@@ -299,6 +375,144 @@ const OrderWizard = ({ onBack }) => {
   // Obtener tallas seleccionadas (con cantidad > 0)
   const getSelectedSizes = () => {
     return SIZES.filter(size => formData.sizes[size] > 0);
+  };
+
+  // Funciones de validación
+  const validateEmail = (email) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const validatePhone = (phone) => {
+    // Acepta números con o sin prefijos internacionales, espacios, guiones, paréntesis
+    const phoneRegex = /^[\d\s\-\+\(\)]{8,15}$/;
+    const digitsOnly = phone.replace(/\D/g, '');
+    return phoneRegex.test(phone) && digitsOnly.length >= 8 && digitsOnly.length <= 15;
+  };
+
+  const validateStep1 = () => {
+    const errors = {};
+    
+    // Validar nombre
+    if (!formData.name.trim()) {
+      errors.name = 'El nombre es obligatorio';
+    } else if (formData.name.trim().length < 2) {
+      errors.name = 'El nombre debe tener al menos 2 caracteres';
+    } else if (formData.name.trim().length > 100) {
+      errors.name = 'El nombre no puede exceder 100 caracteres';
+    }
+    
+    // Validar email
+    if (!formData.email.trim()) {
+      errors.email = 'El correo electrónico es obligatorio';
+    } else if (!validateEmail(formData.email)) {
+      errors.email = 'Ingresa un correo electrónico válido';
+    }
+    
+    // Validar teléfono
+    if (!formData.phone.trim()) {
+      errors.phone = 'El teléfono es obligatorio';
+    } else if (!validatePhone(formData.phone)) {
+      errors.phone = 'Ingresa un teléfono válido (8-15 dígitos)';
+    }
+    
+    return errors;
+  };
+
+  const validateStep2 = () => {
+    const errors = {};
+    const totalQuantity = Object.values(formData.sizes).reduce((a, b) => a + b, 0);
+    
+    if (totalQuantity === 0) {
+      errors.sizes = 'Debes seleccionar al menos una talla con cantidad mayor a 0';
+    }
+    
+    // Validar que las cantidades sean números válidos
+    SIZES.forEach(size => {
+      const quantity = formData.sizes[size];
+      if (quantity < 0) {
+        errors[`size_${size}`] = 'La cantidad no puede ser negativa';
+      } else if (quantity > 1000) {
+        errors[`size_${size}`] = 'La cantidad no puede exceder 1000 unidades por talla';
+      }
+    });
+    
+    return errors;
+  };
+
+  const validateStep3 = () => {
+    // El paso 3 es opcional, pero si se llena un nombre o número, debe ser válido
+    const errors = {};
+    const selectedSizes = getSelectedSizes();
+    
+    selectedSizes.forEach(size => {
+      const quantity = formData.sizes[size];
+      const names = formData.namesBySize[size] || [];
+      const numbers = formData.numbersBySize[size] || [];
+      
+      for (let i = 0; i < quantity; i++) {
+        const name = names[i] || '';
+        const number = numbers[i] || '';
+        
+        // Si se llena el nombre, validar
+        if (name.trim()) {
+          if (name.trim().length < 1) {
+            errors[`name_${size}_${i}`] = 'El nombre no puede estar vacío';
+          } else if (name.trim().length > 50) {
+            errors[`name_${size}_${i}`] = 'El nombre no puede exceder 50 caracteres';
+          }
+        }
+        
+        // Si se llena el número, validar
+        if (number.trim()) {
+          if (number.trim().length > 10) {
+            errors[`number_${size}_${i}`] = 'El número no puede exceder 10 caracteres';
+          }
+        }
+      }
+    });
+    
+    return errors;
+  };
+
+  const validateStep4 = () => {
+    const errors = {};
+    const MAX_FILES = 10;
+    
+    if (formData.files.length > MAX_FILES) {
+      errors.files = [`No puedes subir más de ${MAX_FILES} archivos`];
+    }
+    
+    // Validar observaciones si se llenan
+    if (formData.observations && formData.observations.length > 1000) {
+      errors.observations = 'Las observaciones no pueden exceder 1000 caracteres';
+    }
+    
+    return errors;
+  };
+
+  const validateCurrentStep = () => {
+    let errors = {};
+    
+    switch (currentStep) {
+      case 1:
+        errors = validateStep1();
+        break;
+      case 2:
+        errors = validateStep2();
+        break;
+      case 3:
+        errors = validateStep3();
+        break;
+      case 4:
+        errors = validateStep4();
+        break;
+      default:
+        break;
+    }
+    
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
   // Inicializar arrays de nombres y números cuando se entra al paso 3
@@ -332,10 +546,60 @@ const OrderWizard = ({ onBack }) => {
     }
   }, [currentStep]);
 
-  const nextStep = () => currentStep < STEPS.length && setCurrentStep(c => c + 1);
-  const prevStep = () => currentStep > 1 && setCurrentStep(c => c - 1);
+  const nextStep = () => {
+    if (validateCurrentStep()) {
+      if (currentStep < STEPS.length) {
+        setCurrentStep(c => c + 1);
+        // Limpiar errores al avanzar
+        setValidationErrors({});
+      }
+    } else {
+      // Scroll suave hacia el primer error
+      setTimeout(() => {
+        const firstError = document.querySelector('.border-red-500, .text-red-600');
+        if (firstError) {
+          firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          firstError.focus();
+        }
+      }, 100);
+    }
+  };
+  
+  const prevStep = () => {
+    if (currentStep > 1) {
+      setCurrentStep(c => c - 1);
+      // Limpiar errores al retroceder
+      setValidationErrors({});
+    }
+  };
   
   const handleSubmit = async () => {
+    // Validar todos los pasos antes de enviar
+    const step1Valid = validateStep1();
+    const step2Valid = validateStep2();
+    const step3Valid = validateStep3();
+    const step4Valid = validateStep4();
+    
+    const allErrors = {
+      ...step1Valid,
+      ...step2Valid,
+      ...step3Valid,
+      ...step4Valid
+    };
+    
+    if (Object.keys(allErrors).length > 0) {
+      setValidationErrors(allErrors);
+      setCurrentStep(1); // Volver al primer paso con errores
+      setError('Por favor, corrige los errores en el formulario antes de enviar.');
+      setTimeout(() => {
+        const firstError = document.querySelector('.border-red-500, .text-red-600');
+        if (firstError) {
+          firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+      return;
+    }
+    
     setIsSubmitting(true);
     setError(null);
     
@@ -347,12 +611,27 @@ const OrderWizard = ({ onBack }) => {
         ? `${API_URL}/api/send-email`
         : '/api/send-email';
       
+      // Crear FormData para enviar archivos
+      const formDataToSend = new FormData();
+      
+      // Agregar los datos del formulario como JSON string
+      const formDataWithoutFiles = {
+        ...formData,
+        files: [] // No enviar los objetos File en el JSON, se enviarán por separado
+      };
+      formDataToSend.append('formData', JSON.stringify(formDataWithoutFiles));
+      
+      // Agregar los archivos
+      if (formData.files && formData.files.length > 0) {
+        formData.files.forEach((file) => {
+          formDataToSend.append('files', file);
+        });
+      }
+      
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ formData }),
+        // No establecer Content-Type, el navegador lo hará automáticamente con el boundary
+        body: formDataToSend,
       });
 
       const data = await response.json();
@@ -397,10 +676,64 @@ const OrderWizard = ({ onBack }) => {
       <div className="space-y-6 animate-fadeIn">
         <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><User className="text-[#FE8F19]"/> Datos del Cliente</h2>
         <div className="grid gap-6">
-          <input type="text" name="name" value={formData.name} onChange={handleInputChange} className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] outline-none" placeholder="Nombre Completo" />
+          <div>
+            <input 
+              type="text" 
+              name="name" 
+              value={formData.name} 
+              onChange={handleInputChange}
+              onBlur={() => setTouchedFields(prev => ({ ...prev, name: true }))}
+              className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] outline-none transition-colors ${
+                validationErrors.name ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300'
+              }`} 
+              placeholder="Nombre Completo *" 
+            />
+            {validationErrors.name && (
+              <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                <span className="text-red-500">•</span>
+                {validationErrors.name}
+              </p>
+            )}
+          </div>
           <div className="grid md:grid-cols-2 gap-6">
-            <input type="email" name="email" value={formData.email} onChange={handleInputChange} className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] outline-none" placeholder="Correo Electrónico" />
-            <input type="tel" name="phone" value={formData.phone} onChange={handleInputChange} className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] outline-none" placeholder="Teléfono" />
+            <div>
+              <input 
+                type="email" 
+                name="email" 
+                value={formData.email} 
+                onChange={handleInputChange}
+                onBlur={() => setTouchedFields(prev => ({ ...prev, email: true }))}
+                className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] outline-none transition-colors ${
+                  validationErrors.email ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300'
+                }`} 
+                placeholder="Correo Electrónico *" 
+              />
+              {validationErrors.email && (
+                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                  <span className="text-red-500">•</span>
+                  {validationErrors.email}
+                </p>
+              )}
+            </div>
+            <div>
+              <input 
+                type="tel" 
+                name="phone" 
+                value={formData.phone} 
+                onChange={handleInputChange}
+                onBlur={() => setTouchedFields(prev => ({ ...prev, phone: true }))}
+                className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] outline-none transition-colors ${
+                  validationErrors.phone ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300'
+                }`} 
+                placeholder="Teléfono *" 
+              />
+              {validationErrors.phone && (
+                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+                  <span className="text-red-500">•</span>
+                  {validationErrors.phone}
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -412,10 +745,31 @@ const OrderWizard = ({ onBack }) => {
           {SIZES.map(size => (
             <div key={size} className="bg-slate-50 p-4 rounded-xl border hover:border-[#FE8F19]/30">
               <div className="flex justify-between mb-2"><span className="font-bold">{size}</span></div>
-              <input type="number" min="0" value={formData.sizes[size]||''} onChange={e=>handleSizeChange(size,e.target.value)} className="w-full p-2 border rounded text-center" placeholder="0" />
+              <input 
+                type="number" 
+                min="0" 
+                max="1000"
+                value={formData.sizes[size]||''} 
+                onChange={e=>handleSizeChange(size,e.target.value)} 
+                className={`w-full p-2 border rounded text-center transition-colors ${
+                  validationErrors[`size_${size}`] ? 'border-red-500' : 'border-gray-300'
+                }`} 
+                placeholder="0" 
+              />
+              {validationErrors[`size_${size}`] && (
+                <p className="mt-1 text-xs text-red-600">{validationErrors[`size_${size}`]}</p>
+              )}
             </div>
           ))}
         </div>
+        {validationErrors.sizes && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <p className="text-red-800 text-sm flex items-center gap-2">
+              <span className="text-red-500 font-bold">⚠</span>
+              {validationErrors.sizes}
+            </p>
+          </div>
+        )}
         <div className="text-right font-bold text-[#FE8F19] text-xl">Total: {Object.values(formData.sizes).reduce((a,b)=>a+b,0)} u.</div>
       </div>
     );
@@ -464,9 +818,15 @@ const OrderWizard = ({ onBack }) => {
                                 type="text"
                                 value={names[index] || ''}
                                 onChange={(e) => handleNameChange(size, index, e.target.value)}
-                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#FE8F19] focus:border-[#FE8F19] outline-none"
+                                maxLength={50}
+                                className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] focus:border-[#FE8F19] outline-none transition-colors ${
+                                  validationErrors[`name_${size}_${index}`] ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300'
+                                }`}
                                 placeholder={`Nombre para el polo ${index + 1}`}
                               />
+                              {validationErrors[`name_${size}_${index}`] && (
+                                <p className="mt-1 text-xs text-red-600">{validationErrors[`name_${size}_${index}`]}</p>
+                              )}
                             </div>
                             <div>
                               <label className="block text-xs font-medium text-gray-700 mb-1">Número</label>
@@ -474,9 +834,15 @@ const OrderWizard = ({ onBack }) => {
                                 type="text"
                                 value={numbers[index] || ''}
                                 onChange={(e) => handleNumberChange(size, index, e.target.value)}
-                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#FE8F19] focus:border-[#FE8F19] outline-none"
+                                maxLength={10}
+                                className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] focus:border-[#FE8F19] outline-none transition-colors ${
+                                  validationErrors[`number_${size}_${index}`] ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300'
+                                }`}
                                 placeholder={`Número para el polo ${index + 1}`}
                               />
+                              {validationErrors[`number_${size}_${index}`] && (
+                                <p className="mt-1 text-xs text-red-600">{validationErrors[`number_${size}_${index}`]}</p>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -493,12 +859,118 @@ const OrderWizard = ({ onBack }) => {
     if (currentStep === 4) return (
       <div className="space-y-6 animate-fadeIn">
         <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><ImageIcon className="text-[#FE8F19]"/> Diseño</h2>
-        <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center relative group hover:border-[#FE8F19]">
-          <input type="file" multiple onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-          <div className="flex flex-col items-center"><Upload className="w-8 h-8 text-[#FE8F19] mb-2"/><span className="text-gray-600">Subir imágenes</span></div>
+        <div className={`border-2 border-dashed rounded-xl p-8 text-center relative group hover:border-[#FE8F19] transition-colors ${
+          validationErrors.files ? 'border-red-500 bg-red-50/50' : 'border-gray-300'
+        }`}>
+          <input 
+            type="file" 
+            multiple 
+            accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" 
+            onChange={handleFileUpload} 
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+          />
+          <div className="flex flex-col items-center">
+            <Upload className="w-8 h-8 text-[#FE8F19] mb-2"/>
+            <span className="text-gray-600">Subir imágenes</span>
+            <span className="text-xs text-gray-400 mt-1">Haz clic para seleccionar archivos (máx. 10MB por archivo, hasta 10 archivos)</span>
+          </div>
         </div>
-        {formData.files.length > 0 && <div className="text-sm text-gray-600">{formData.files.length} archivos seleccionados</div>}
-        <textarea name="observations" value={formData.observations} onChange={handleInputChange} rows="3" className="w-full p-3 border rounded-lg" placeholder="Observaciones..."></textarea>
+        {validationErrors.files && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <p className="text-red-800 text-sm font-medium mb-2">Errores en los archivos:</p>
+            <ul className="list-disc list-inside space-y-1">
+              {Array.isArray(validationErrors.files) ? (
+                validationErrors.files.map((error, idx) => (
+                  <li key={idx} className="text-red-700 text-sm">{error}</li>
+                ))
+              ) : (
+                <li className="text-red-700 text-sm">{validationErrors.files}</li>
+              )}
+            </ul>
+          </div>
+        )}
+        
+        {formData.files.length > 0 && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-medium text-gray-700">
+                {formData.files.length} {formData.files.length === 1 ? 'archivo seleccionado' : 'archivos seleccionados'}
+              </p>
+            </div>
+            
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {formData.files.map((file, index) => (
+                <div key={index} className="relative group bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                  {filePreviews[index] ? (
+                    <div className="relative aspect-square">
+                      <img 
+                        src={filePreviews[index]} 
+                        alt={file.name}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                        <button
+                          onClick={() => removeFile(index)}
+                          className="opacity-0 group-hover:opacity-100 bg-red-500 hover:bg-red-600 text-white rounded-full p-2 transition-opacity"
+                          type="button"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="aspect-square flex items-center justify-center bg-gray-100">
+                      <FileText className="w-8 h-8 text-gray-400" />
+                    </div>
+                  )}
+                  <div className="p-2">
+                    <p className="text-xs text-gray-600 truncate" title={file.name}>
+                      {file.name}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      {(file.size / 1024).toFixed(1)} KB
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => removeFile(index)}
+                    className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity md:hidden"
+                    type="button"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Observaciones
+            {formData.observations && (
+              <span className="text-xs text-gray-500 ml-2">
+                ({formData.observations.length}/1000 caracteres)
+              </span>
+            )}
+          </label>
+          <textarea 
+            name="observations" 
+            value={formData.observations} 
+            onChange={handleInputChange} 
+            rows="3" 
+            maxLength={1000}
+            className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-[#FE8F19] focus:border-[#FE8F19] outline-none transition-colors ${
+              validationErrors.observations ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300'
+            }`} 
+            placeholder="Agrega cualquier observación o detalle adicional sobre tu pedido..."
+          />
+          {validationErrors.observations && (
+            <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+              <span className="text-red-500">•</span>
+              {validationErrors.observations}
+            </p>
+          )}
+        </div>
       </div>
     );
     if (currentStep === 5) return (

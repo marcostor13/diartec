@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 .env
+.env.local
+.env.*.local
+
+# AWS credentials
+*.pem
+*.key
 
 # Editor directories and files
 .vscode/*

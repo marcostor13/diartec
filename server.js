@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import multer from 'multer';
+import { uploadMultipleFilesToS3 } from './utils/s3Upload.js';
 
 dotenv.config();
 
@@ -10,6 +12,14 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// Configurar multer para manejar archivos en memoria
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB por archivo
+  },
+});
 
 // Configurar transporter de nodemailer
 const transporter = nodemailer.createTransport({
@@ -326,15 +336,25 @@ const getDiartecEmailTemplate = (formData) => {
               </div>
               ` : ''}
               
-              ${formData.files && formData.files.length > 0 ? `
+              ${(formData.fileUrls && formData.fileUrls.length > 0) || (formData.files && formData.files.length > 0) ? `
               <div style="background-color: #f9fafb; border-radius: 12px; padding: 24px; border: 1px solid #e5e7eb; margin-top: 24px;">
                 <h3 style="margin: 0 0 12px; color: #1f2937; font-size: 18px; font-weight: bold;">
                   Archivos Adjuntos
                 </h3>
-                <p style="margin: 0; color: #6b7280; font-size: 15px;">
-                  El cliente ha adjuntado <strong>${formData.files.length}</strong> ${formData.files.length === 1 ? 'archivo' : 'archivos'}.
-                  <br>Revisa el sistema para ver los archivos subidos.
+                <p style="margin: 0 0 12px; color: #6b7280; font-size: 15px;">
+                  El cliente ha adjuntado <strong>${formData.fileUrls ? formData.fileUrls.length : formData.files.length}</strong> ${(formData.fileUrls ? formData.fileUrls.length : formData.files.length) === 1 ? 'archivo' : 'archivos'}.
                 </p>
+                ${formData.fileUrls && formData.fileUrls.length > 0 ? `
+                <div style="background: white; padding: 16px; border-radius: 8px;">
+                  ${formData.fileUrls.map((url, index) => `
+                    <p style="margin: 8px 0;">
+                      <a href="${url}" target="_blank" style="color: #FE8F19; text-decoration: none; font-weight: 500;">
+                        📎 Archivo ${index + 1} - Ver en S3
+                      </a>
+                    </p>
+                  `).join('')}
+                </div>
+                ` : ''}
               </div>
               ` : ''}
             </td>
@@ -363,13 +383,31 @@ const getDiartecEmailTemplate = (formData) => {
   `;
 };
 
-// Endpoint para enviar correos
-app.post('/api/send-email', async (req, res) => {
+// Endpoint para enviar correos con subida de archivos
+app.post('/api/send-email', upload.array('files', 10), async (req, res) => {
   try {
-    const { formData } = req.body;
+    // Parsear formData desde el body (si viene como JSON string)
+    let formData;
+    if (typeof req.body.formData === 'string') {
+      formData = JSON.parse(req.body.formData);
+    } else {
+      formData = req.body.formData || req.body;
+    }
 
     if (!formData || !formData.email || !formData.name) {
       return res.status(400).json({ error: 'Datos incompletos' });
+    }
+
+    // Subir archivos a S3 si existen
+    let fileUrls = [];
+    if (req.files && req.files.length > 0) {
+      try {
+        fileUrls = await uploadMultipleFilesToS3(req.files);
+        formData.fileUrls = fileUrls; // Agregar URLs a formData para las plantillas
+      } catch (s3Error) {
+        console.error('Error subiendo archivos a S3:', s3Error);
+        // Continuar con el envío de correos aunque falle la subida de archivos
+      }
     }
 
     // Enviar correo al cliente
@@ -396,7 +434,8 @@ app.post('/api/send-email', async (req, res) => {
 
     res.json({ 
       success: true, 
-      message: 'Correos enviados correctamente' 
+      message: 'Correos enviados correctamente',
+      fileUrls: fileUrls.length > 0 ? fileUrls : undefined
     });
   } catch (error) {
     console.error('Error enviando correos:', error);
