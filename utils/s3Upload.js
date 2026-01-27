@@ -10,19 +10,19 @@ let s3Client = null;
 
 const getS3Client = () => {
   if (!s3Client) {
-    const accessKeyId = process.env.AWS_ACCESS_KEY_ID?.trim();
-    const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY?.trim();
-    const region = (process.env.AWS_REGION || 'us-east-1').trim();
+    const accessKeyId = process.env.AWS_ACCESS_KEY_ID2?.trim();
+    const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY2?.trim();
+    const region = (process.env.AWS_REGION2 || 'us-east-1').trim();
 
     // Debug: verificar que las credenciales estén presentes (sin mostrar valores completos)
     console.log('🔍 Verificando credenciales AWS...');
-    console.log('AWS_ACCESS_KEY_ID:', accessKeyId ? `${accessKeyId.substring(0, 8)}...` : 'NO ENCONTRADO');
+    console.log('AWS_ACCESS_KEY_ID2:', accessKeyId ? `${accessKeyId.substring(0, 8)}...` : 'NO ENCONTRADO');
     console.log('AWS_SECRET_ACCESS_KEY:', secretAccessKey ? '***CONFIGURADO***' : 'NO ENCONTRADO');
     console.log('AWS_REGION:', region);
     console.log('AWS_BUCKET_NAME:', process.env.AWS_BUCKET_NAME?.trim() || 'NO ENCONTRADO');
 
     if (!accessKeyId || !secretAccessKey) {
-      throw new Error('Las credenciales de AWS no están configuradas. Verifica las variables de entorno AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY');
+      throw new Error('Las credenciales de AWS no están configuradas. Verifica las variables de entorno AWS_ACCESS_KEY_ID2 y AWS_SECRET_ACCESS_KEY2');
     }
 
     if (accessKeyId.length === 0 || secretAccessKey.length === 0) {
