@@ -10,6 +10,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Middleware para normalizar rutas de Netlify Functions
+app.use((req, res, next) => {
+  // Si la ruta comienza con /.netlify/functions/api, transformarla a /api
+  if (req.path.startsWith('/.netlify/functions/api')) {
+    const newPath = req.path.replace('/.netlify/functions/api', '/api');
+    req.url = req.url.replace(req.path, newPath);
+    req.path = newPath;
+  }
+  next();
+});
+
 // Configurar transporter de nodemailer
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -372,9 +383,6 @@ const getDiartecEmailTemplate = (formData) => {
   `;
 };
 
-// Router para las rutas
-const router = express.Router();
-
 // Middleware para manejar multipart/form-data en Netlify Functions
 const parseMultipartForm = (req, res, next) => {
   const contentType = req.headers['content-type'] || '';
@@ -425,8 +433,8 @@ const parseMultipartForm = (req, res, next) => {
   req.pipe(bb);
 };
 
-// Endpoint para enviar correos
-router.post('/send-email', parseMultipartForm, async (req, res) => {
+// Endpoint para enviar correos - manejar tanto /api/send-email como /.netlify/functions/api/send-email
+app.post('/api/send-email', parseMultipartForm, async (req, res) => {
   try {
     let formData = req.body.formData || req.body;
     
@@ -487,12 +495,27 @@ router.post('/send-email', parseMultipartForm, async (req, res) => {
 });
 
 // Health check
-router.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Servidor funcionando correctamente' });
 });
 
-// Usar el router con el prefijo /api
-app.use('/.netlify/functions/api', router);
+// Manejar rutas no encontradas
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: 'Ruta no encontrada', 
+    path: req.path,
+    method: req.method 
+  });
+});
+
+// Manejar errores
+app.use((err, req, res, next) => {
+  console.error('Error en la función:', err);
+  res.status(500).json({ 
+    error: 'Error interno del servidor', 
+    details: err.message 
+  });
+});
 
 // Exportar el handler para Netlify
 export const handler = serverless(app);
